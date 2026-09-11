@@ -2,8 +2,30 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, openSync, writeSync, closeSync } from 'node:fs';
 import { loadConfig, selectSteps } from './config.js';
-import { resolveWorktreePath, deriveGitInfo } from './worktree.js';
+import { resolveWorktreePath, deriveGitInfo, runCmd } from './worktree.js';
 import { runSteps } from './runner.js';
+
+let setupStarted = false;
+
+// Every status expires: setup runs once per worktree, so a stale token can never be corrected.
+const TTL_MS = { running: 3600000, done: 5000, failed: 3600000 };
+
+function reportStatus(status) {
+  const workspaceId = process.env.HERDR_WORKSPACE_ID;
+  if (!workspaceId) return;
+  // herdr 0.7.4+ CLI contract; on older herdr the command fails and setup only warns.
+  const args = [
+    'workspace', 'report-metadata', workspaceId,
+    '--source', 'plugin:tdi.worktree-setup',
+    '--token', `setup=setup: ${status}`,
+    '--ttl-ms', String(TTL_MS[status]),
+  ];
+  const result = runCmd(process.env.HERDR_BIN_PATH || 'herdr', args, { timeout: 2000 });
+  if (result.status !== 0) {
+    const reason = result.error?.message || result.stderr.trim() || `exit ${result.status}`;
+    process.stderr.write(`worktree-setup: sidebar status update failed: ${reason}\n`);
+  }
+}
 
 function stamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
@@ -62,6 +84,8 @@ async function main() {
     }
   };
 
+  setupStarted = true;
+  reportStatus('running');
   const result = await runSteps(steps, {
     cwd: worktree,
     env: stepEnv,
@@ -85,8 +109,12 @@ async function main() {
 }
 
 main()
-  .then((code) => process.exit(code))
+  .then((code) => {
+    if (setupStarted) reportStatus(code === 0 ? 'done' : 'failed');
+    process.exit(code);
+  })
   .catch((err) => {
+    if (setupStarted) reportStatus('failed');
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   });

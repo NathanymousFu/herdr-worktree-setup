@@ -53,6 +53,7 @@ export function runCmd(cmd, args, opts = {}) {
     status: res.status ?? 1,
     stdout: res.stdout ?? '',
     stderr: res.stderr ?? '',
+    error: res.error,
   };
 }
 

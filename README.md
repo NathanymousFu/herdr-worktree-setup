@@ -1,7 +1,7 @@
 # Worktree Setup — herdr plugin
 
 Runs user-configured shell steps inside a new worktree when herdr fires
-`worktree.created`, so the checkout is immediately usable (copy `.env*`,
+`worktree.created`, preparing the checkout in the background (copy `.env*`,
 `mise trust`, `direnv allow`, install deps, etc.). Solves
 [herdr discussion #394](https://github.com/ogulcancelik/herdr/discussions/394).
 
@@ -65,6 +65,33 @@ steps = [
 - Fail-fast: the first step that exits non-zero stops the run; make optional
   steps tolerant with `... || true`.
 - Output is streamed and also written to `$HERDR_PLUGIN_STATE_DIR/setup-<ts>.log`.
+
+### Sidebar status
+
+On herdr 0.7.4+, setup publishes a `setup` workspace metadata token so the
+sidebar shows when a new worktree is still installing: `setup: running`, then
+`setup: done` or `setup: failed`. herdr expires `done` after 5s and the other
+two after an hour, so a setup that is killed or that you fix by hand never
+leaves a stale token behind. Repos with no matched steps publish nothing, and on
+older herdr the report only logs a warning; setup's exit code never changes.
+
+Display it by adding `$setup` to `[ui.sidebar.spaces].rows` in
+`~/.config/herdr/config.toml`, then `herdr config check` and
+`herdr server reload-config`. This is herdr's default layout with the token
+appended; merge it into your own rows rather than replacing them:
+
+```toml
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", "workspace"],
+  ["branch", "git_status", "$setup"],
+]
+```
+
+- The plugin never edits herdr config; this is a one-time display setting.
+- Step output still goes to the setup log — the token is display-only.
+- To drop a status before it expires, use the workspace id from `herdr workspace list`:
+  `herdr workspace report-metadata <id> --source plugin:tdi.worktree-setup --clear-token setup`.
 
 ## Develop
 
