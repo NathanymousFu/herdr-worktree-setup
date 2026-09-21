@@ -2,11 +2,18 @@
 # Steps run inside the NEW worktree with these env vars available:
 #   HERDR_MAIN_REPO  - absolute path to the main repo checkout
 #   HERDR_WORKTREE   - absolute path to the new worktree
-#   HERDR_BRANCH     - branch checked out in the new worktree
+#   HERDR_BRANCH     - branch checked out in the worktree
+#
+# cleanup_steps run after a worktree is removed. HERDR_WORKTREE still contains
+# its former absolute path, but that directory no longer exists; cleanup runs
+# with the main repo as its cwd. Requires herdr 0.7.4+ to resolve the main repo
+# after removal; older herdr logs a warning and skips cleanup.
 
 # Optional catch-all: runs for any repo without a specific [[project]] match.
+# A matching [[project]] entry wins outright, so it needs its own cleanup_steps.
 [default]
 steps = ["direnv allow 2>/dev/null || true"]
+cleanup_steps = []
 
 # One entry per repo. `path` is the MAIN repo path (supports ~).
 [[project]]
@@ -16,4 +23,7 @@ steps = [
   "mise trust",
   "direnv allow",
   "pnpm install",
+]
+cleanup_steps = [
+  'echo "cleaning resources for $HERDR_BRANCH"',
 ]

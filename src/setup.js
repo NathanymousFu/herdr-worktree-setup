@@ -1,9 +1,7 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { mkdirSync, openSync, writeSync, closeSync } from 'node:fs';
 import { loadConfig, selectSteps } from './config.js';
-import { resolveWorktreePath, deriveGitInfo, runCmd } from './worktree.js';
-import { runSteps } from './runner.js';
+import { resolveWorktreePath, deriveGitInfo, runCmd, buildStepEnv, contextDump } from './worktree.js';
+import { runStepsWithLog } from './runner.js';
 
 let setupStarted = false;
 
@@ -27,10 +25,6 @@ function reportStatus(status) {
   }
 }
 
-function stamp() {
-  return new Date().toISOString().replace(/[:.]/g, '-');
-}
-
 async function main() {
   const env = process.env;
 
@@ -40,10 +34,7 @@ async function main() {
   const worktree = resolveWorktreePath(env);
   if (!worktree) {
     process.stderr.write('worktree-setup: could not resolve new worktree path\n');
-    const trunc = (v) => (v == null ? '(unset)' : String(v).slice(0, 2000));
-    process.stderr.write(`  HERDR_PLUGIN_EVENT_JSON=${trunc(env.HERDR_PLUGIN_EVENT_JSON)}\n`);
-    process.stderr.write(`  HERDR_PLUGIN_CONTEXT_JSON=${trunc(env.HERDR_PLUGIN_CONTEXT_JSON)}\n`);
-    process.stderr.write(`  HERDR_WORKSPACE_ID=${env.HERDR_WORKSPACE_ID ?? '(unset)'}\n`);
+    process.stderr.write(contextDump(env));
     return 1;
   }
 
@@ -56,53 +47,18 @@ async function main() {
   const steps = selectSteps(config, mainRepo, homedir());
   if (!steps || steps.length === 0) return 0;
 
-  const stepEnv = {
-    ...env,
-    HERDR_MAIN_REPO: mainRepo,
-    HERDR_WORKTREE: worktree,
-    HERDR_BRANCH: branch ?? '',
-  };
-
-  let logFd = null;
-  if (env.HERDR_PLUGIN_STATE_DIR) {
-    try {
-      mkdirSync(env.HERDR_PLUGIN_STATE_DIR, { recursive: true });
-      logFd = openSync(join(env.HERDR_PLUGIN_STATE_DIR, `setup-${stamp()}.log`), 'a');
-    } catch {
-      logFd = null;
-    }
-  }
-
-  const writeOut = (text) => {
-    process.stdout.write(text);
-    if (logFd !== null) {
-      try {
-        writeSync(logFd, text);
-      } catch {
-        // best-effort logging
-      }
-    }
-  };
-
   setupStarted = true;
   reportStatus('running');
-  const result = await runSteps(steps, {
+  const result = await runStepsWithLog(steps, {
     cwd: worktree,
-    env: stepEnv,
-    onStepStart: (step) => writeOut(`$ ${step}\n`),
-    onData: (chunk) => writeOut(chunk.toString()),
-    onStepEnd: (_step, status) => writeOut(`[exit ${status}]\n`),
+    env: buildStepEnv(env, { mainRepo, worktree, branch }),
+    stateDir: env.HERDR_PLUGIN_STATE_DIR,
+    logPrefix: 'setup',
   });
-  if (logFd !== null) {
-    try {
-      closeSync(logFd);
-    } catch {
-      // ignore
-    }
-  }
 
   if (!result.ok) {
-    process.stderr.write(`worktree-setup: step failed: ${result.failedStep}\n`);
+    const reason = result.error ? `${result.failedStep} (${result.error.message})` : result.failedStep;
+    process.stderr.write(`worktree-setup: step failed: ${reason}\n`);
     return result.code;
   }
   return 0;
@@ -115,6 +71,6 @@ main()
   })
   .catch((err) => {
     if (setupStarted) reportStatus('failed');
-    process.stderr.write(`${err.message}\n`);
+    process.stderr.write(`worktree-setup: ${err.message}\n`);
     process.exit(1);
   });

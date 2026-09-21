@@ -1,6 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseJsonEnv, extractWorktreePath, parseMainRepo, resolveWorktreePath, deriveGitInfo } from '../src/worktree.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  parseJsonEnv,
+  extractWorktreePath,
+  extractRemovedWorktreeInfo,
+  parseMainRepo,
+  resolveWorktreePath,
+  deriveGitInfo,
+} from '../src/worktree.js';
+
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
+
+function fixture(name) {
+  return JSON.parse(readFileSync(join(FIXTURES, name), 'utf8'));
+}
 
 test('parseJsonEnv parses valid JSON, returns null otherwise', () => {
   assert.deepEqual(parseJsonEnv('{"a":1}'), { a: 1 });
@@ -39,6 +55,77 @@ test('extractWorktreePath resolves the real herdr 0.7.1 context JSON shape', () 
     worktree: { repo_root: '/repo', repo_name: 'demo-main', checkout_path: '/wt/demo-feat' },
   };
   assert.equal(extractWorktreePath(null, contextJson), '/wt/demo-feat');
+});
+
+test('extractRemovedWorktreeInfo reads the removed path, branch, and main repo', () => {
+  const eventJson = {
+    event: 'worktree_removed',
+    data: {
+      workspace_id: 'wY',
+      workspace: {
+        worktree: {
+          repo_root: '/repo',
+          checkout_path: '/wt/feat',
+        },
+      },
+      worktree: {
+        path: '/wt/feat',
+        branch: 'feat/demo',
+      },
+      forced: false,
+    },
+  };
+  assert.deepEqual(extractRemovedWorktreeInfo(eventJson, null), {
+    worktreePath: '/wt/feat',
+    mainRepo: '/repo',
+    branch: 'feat/demo',
+  });
+});
+
+test('extractRemovedWorktreeInfo falls back to plugin context', () => {
+  const contextJson = {
+    branch: 'feat',
+    worktree: { repo_root: '/repo', checkout_path: '/wt/feat' },
+  };
+  assert.deepEqual(extractRemovedWorktreeInfo(null, contextJson), {
+    worktreePath: '/wt/feat',
+    mainRepo: '/repo',
+    branch: 'feat',
+  });
+});
+
+test('extractRemovedWorktreeInfo resolves the captured herdr 0.9.1 payload', () => {
+  // Captured from herdr 0.9.1 with a plugin hook on worktree.removed; see
+  // test/fixtures/README.md for how to re-capture after a herdr upgrade.
+  const eventJson = fixture('herdr-0.9.1-worktree-removed.event.json');
+  const contextJson = fixture('herdr-0.9.1-worktree-removed.context.json');
+
+  assert.deepEqual(extractRemovedWorktreeInfo(eventJson, contextJson), {
+    worktreePath: '/tmp/herdr-payload-capture/wt',
+    mainRepo: '/tmp/herdr-payload-capture/repo',
+    branch: 'probe-capture',
+  });
+});
+
+test('extractRemovedWorktreeInfo never treats a cwd as the removed worktree', () => {
+  // Regression: after removal the workspace cwd can be the main checkout.
+  // Accepting it as the removed path would let a step that trusts
+  // $HERDR_WORKTREE (`rm -rf "$HERDR_WORKTREE"`) delete the repository.
+  const contextJson = { workspace_cwd: '/repo', worktree: { repo_root: '/repo' } };
+  assert.deepEqual(extractRemovedWorktreeInfo(null, contextJson), {
+    worktreePath: null,
+    mainRepo: '/repo',
+    branch: null,
+  });
+});
+
+test('extractRemovedWorktreeInfo ignores non-string probe results', () => {
+  const eventJson = { data: { worktree: { path: 123, branch: '' } } };
+  assert.deepEqual(extractRemovedWorktreeInfo(eventJson, null), {
+    worktreePath: null,
+    mainRepo: null,
+    branch: null,
+  });
 });
 
 test('parseMainRepo returns the first worktree path from porcelain output', () => {

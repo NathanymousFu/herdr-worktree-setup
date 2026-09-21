@@ -13,7 +13,7 @@ When herdr creates a new worktree (a "space"), the checkout is not immediately u
 A herdr plugin that, on `worktree.created`, runs user-defined setup steps inside the new worktree so it is usable without manual intervention.
 
 Non-goals (YAGNI):
-- Teardown scripts (`worktree.removed`) — out of scope for v0.1.0; can be added later.
+- Teardown scripts (`worktree.removed`) — out of scope for v0.1.0. Shipped later as `cleanup_steps`; see the addendum at the end of this document.
 - Built-in declarative toggles (`mise_trust = true`, `copy_env = [...]`) — arbitrary shell steps already cover these; ship documented recipes instead.
 - Windows support in v0.1.0 — the target tools (mise, direnv) are unix; declare `platforms = ["linux", "macos"]`.
 
@@ -101,8 +101,9 @@ Entrypoint `src/setup.js` is a thin orchestrator over three focused, independent
 | File | Responsibility | Depends on |
 |------|----------------|-----------|
 | `src/setup.js` | Orchestrate the four phases; own process exit codes | the three modules below |
-| `src/worktree.js` | Resolve worktree path (event JSON + CLI fallback), main repo, branch | `child_process`, `HERDR_*` env |
-| `src/config.js` | Read/parse config, expand + realpath match, pick steps | `smol-toml`, `fs`, `path`, `os` |
+| `src/cleanup.js` | Orchestrate the cleanup phase for `worktree.removed`; own process exit codes | the three modules below |
+| `src/worktree.js` | Resolve worktree path (event JSON + CLI fallback), main repo, branch; build step env; dump payloads | `child_process`, `HERDR_*` env |
+| `src/config.js` | Read/parse config, expand + realpath match, pick steps, validate step lists | `smol-toml`, `fs`, `path`, `os` |
 | `src/runner.js` | Run a step list in a cwd with env; tee log; fail-fast | `child_process`, `fs` |
 
 Each module is a pure-ish unit with a small interface, testable without a running herdr.
@@ -116,6 +117,7 @@ config.example.toml
 README.md
 src/
   setup.js
+  cleanup.js
   worktree.js
   config.js
   runner.js
@@ -123,6 +125,7 @@ test/
   worktree.test.js
   config.test.js
   runner.test.js
+  cleanup.test.js
 ```
 
 ## Testing (TDD, `node:test` + `node:assert`)
@@ -145,3 +148,33 @@ test/
 
 - Exact `worktree.created` event JSON shape — probed at runtime + CLI fallback; first real run logs the raw JSON to refine field probing.
 - Precise `herdr worktree list --json` field names — verified against a live herdr during implementation; fallback path adjusted if needed.
+
+## Addendum: cleanup hooks (2026-09)
+
+`cleanup_steps` runs after `worktree.removed` and reuses the same config
+matching, env contract, fail-fast policy, and log teeing as setup. Deltas:
+
+- **cwd is the main repository**, because the removed worktree directory no
+  longer exists. `$HERDR_WORKTREE` still carries its former path.
+- **`$HERDR_WORKTREE` is never the main repository.** `workspace_cwd` is not
+  probed for a removed worktree (a cwd is not a worktree path), and cleanup
+  refuses to run when the resolved path equals the main repo, so a user step
+  like `rm -rf "$HERDR_WORKTREE"` cannot delete the checkout. Path identity is
+  compared through the parent directory, because the removed path cannot be
+  `realpath`ed itself.
+- **No sidebar status.** Setup publishes `setup: running|done|failed` against a
+  live workspace; after removal there is no workspace left to report against.
+- **Cleanup degrades instead of failing.** A payload that names no removed
+  worktree (herdr < 0.7.4) or a main repo that is gone logs the raw payload and
+  exits 0; only the same-path refusal exits non-zero. `min_herdr_version` stays
+  `0.7.0`, so setup keeps working on older herdr.
+- **Malformed step lists are errors.** A `steps`/`cleanup_steps` value that is
+  present but not an array of strings exits non-zero instead of silently
+  running nothing.
+- **Payload verified, not guessed.** A real `worktree.removed` payload captured
+  from herdr 0.9.1 lives in `test/fixtures/` and the resolver is asserted against
+  it: `data.worktree.path`, `data.worktree.branch`, and
+  `data.workspace.worktree.repo_root` are all present and mean what the resolver
+  assumes. `context.workspace_cwd` is still not probed, because a cwd is not a
+  worktree path. Re-capture after a herdr upgrade with
+  `test/fixtures/README.md`.

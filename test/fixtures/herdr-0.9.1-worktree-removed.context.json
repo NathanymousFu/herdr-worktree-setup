@@ -1,0 +1,15 @@
+{
+  "correlation_id": "worktree.removed",
+  "invocation_source": "api",
+  "tab_id": "wP:t1",
+  "workspace_cwd": "/tmp/herdr-payload-capture/wt",
+  "workspace_id": "wP",
+  "workspace_label": "wt",
+  "worktree": {
+    "checkout_path": "/tmp/herdr-payload-capture/wt",
+    "is_linked_worktree": true,
+    "repo_key": "/private/tmp/herdr-payload-capture/repo/.git",
+    "repo_name": "repo",
+    "repo_root": "/tmp/herdr-payload-capture/repo"
+  }
+}

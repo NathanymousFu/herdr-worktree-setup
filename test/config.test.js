@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expandTilde, loadConfig, selectSteps } from '../src/config.js';
+import { expandTilde, loadConfig, samePath, selectCleanupSteps, selectSteps } from '../src/config.js';
 
 test('expandTilde expands ~ and ~/ using home', () => {
   assert.equal(expandTilde('~', '/home/u'), '/home/u');
@@ -36,6 +36,21 @@ test('selectSteps matches main repo by realpath and returns its steps', () => {
   rmSync(repo, { recursive: true, force: true });
 });
 
+test('selectCleanupSteps selects project cleanup steps independently', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'wtrepo-'));
+  const cfg = {
+    project: [{ path: repo, steps: ['setup'], cleanup_steps: ['cleanup'] }],
+  };
+  assert.deepEqual(selectSteps(cfg, repo), ['setup']);
+  assert.deepEqual(selectCleanupSteps(cfg, repo), ['cleanup']);
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test('selectCleanupSteps falls back to default cleanup steps', () => {
+  const cfg = { default: { cleanup_steps: ['cleanup default'] } };
+  assert.deepEqual(selectCleanupSteps(cfg, '/other'), ['cleanup default']);
+});
+
 test('selectSteps falls back to [default] when no project matches', () => {
   const repo = mkdtempSync(join(tmpdir(), 'wtrepo-'));
   const cfg = { project: [{ path: '/nope', steps: ['x'] }], default: { steps: ['echo def'] } };
@@ -61,5 +76,45 @@ test('selectSteps matches a ~-prefixed project path via realpath', () => {
   mkdirSync(repo);
   const cfg = { project: [{ path: '~/proj', steps: ['echo tilde'] }] };
   assert.deepEqual(selectSteps(cfg, repo, home), ['echo tilde']);
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a matching project entry wins outright over [default]', () => {
+  // Pins the documented rule: the project entry does not inherit from
+  // [default], so its missing cleanup_steps is an empty list, not a fallback.
+  const repo = mkdtempSync(join(tmpdir(), 'wtrepo-'));
+  const cfg = {
+    project: [{ path: repo, steps: ['setup only'] }],
+    default: { cleanup_steps: ['cleanup default'] },
+  };
+  assert.deepEqual(selectCleanupSteps(cfg, repo), []);
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test('a step list that is not an array of strings is rejected, not ignored', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'wtrepo-'));
+  const asString = { project: [{ path: repo, cleanup_steps: 'echo hi' }] };
+  assert.throws(() => selectCleanupSteps(asString, repo), /cleanup_steps for .* must be an array of strings/);
+
+  const asNumbers = { project: [{ path: repo, cleanup_steps: [123] }] };
+  assert.throws(() => selectCleanupSteps(asNumbers, repo), /entry 1 is number/);
+
+  const defaultAsString = { default: { steps: 'echo hi' } };
+  assert.throws(() => selectSteps(defaultAsString, '/other'), /steps for \[default\] must be an array of strings/);
+
+  // Absent is still a legitimate empty list.
+  assert.deepEqual(selectCleanupSteps({ project: [{ path: repo }] }, repo), []);
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test('samePath compares a removed path against a live one through symlinks', () => {
+  const home = mkdtempSync(join(tmpdir(), 'wthome-'));
+  const repo = join(home, 'main');
+  mkdirSync(repo);
+  const real = realpathSync(repo);
+  assert.equal(samePath(repo, real, home), true);
+  assert.equal(samePath(repo, join(home, 'other'), home), false);
+  // The removed worktree no longer exists; its parent still does.
+  assert.equal(samePath(join(repo, 'gone-wt'), join(real, 'gone-wt'), home), true);
   rmSync(home, { recursive: true, force: true });
 });
